@@ -16,6 +16,7 @@ import concurrent.futures
 import logging
 import multiprocessing
 from itertools import combinations, permutations
+from typing import Dict
 
 import numpy as np
 import sympy as sp
@@ -67,7 +68,12 @@ def find_duplicates(pi_set, other) -> list:
 
 
 class BuckinghamPi:
-    def __init__(self, n_jobs: int = 1, var_max_sets: int | None = None):
+    def __init__(
+        self,
+        n_jobs: int = 1,
+        var_max_sets: int | None = None,
+        is_var_signed: Dict[str, bool] | None = None,
+    ):
         """
         Construct an instance of the BuckinghamPi theorem
         """
@@ -89,6 +95,7 @@ class BuckinghamPi:
             self.n_jobs = n_jobs
 
         self.__flagged_var_max_sets = var_max_sets
+        self._is_var_signed = is_var_signed
 
     @property
     def fundamental_variables(self):
@@ -165,6 +172,18 @@ class BuckinghamPi:
         """
         if dimensions != "1":
             expr = self.__parse_expression(dimensions)
+
+            # Make sure dimensions only contain integer exponents
+            # Technically this only checks for *any* rational number in the expression,
+            # but units should only be expressions made up of a dimension and an exponent, so implicitly this is fine.
+            has_rational_exponents = any(
+                [a.is_Rational and not a.is_Integer for a in expr.atoms()]
+            )
+            if has_rational_exponents:
+                raise ValueError(
+                    f"Dimensions {dimensions} contain fractional exponent(s), which is not allowed."
+                )
+
             self.__variables.update({name: expr})
             var_idx = len(list(self.__variables.keys())) - 1
             self.__var_from_idx[var_idx] = name
@@ -282,6 +301,46 @@ class BuckinghamPi:
             if not already_exists:
                 self.__allpiterms.append(spacepiterms)
 
+    def _apply_pi_term_constraints(self):
+
+        def _sign_valid(pi: sp.Expr, var_is_signed: Dict[str, bool]) -> bool:
+            """
+            Returns False if provided Pi group has an argument which is a **signed** symbol
+            raised to an **even** or **non-integer** power.
+
+            E.g. sqrt(shfx) would cause NaN in unstable conditions
+            and shfx**2 would lose information. Therefore, we avoid these!
+            """
+            for arg in pi.args:
+                if arg.is_Atom:
+                    continue
+                elif arg.is_Pow:
+                    # Allow all power expressions with uneven integer exponents because that keeps original sign
+                    arg: sp.Pow
+                    if arg.exp.is_Integer and not arg.exp.is_even:
+                        continue
+
+                    # Only allow even or non-integer exponents if base is unsigned
+                    if var_is_signed[str(arg.base)]:
+                        logger.debug(f"Eliminating {pi} because of {arg}.")
+                        return False
+                else:
+                    raise ValueError(f"Unexpected argument {type(arg)} in Pi group pi")
+
+            return True
+
+        logger.info("Applying pi term constraints")
+        n_before_constraints = len(self.__allpiterms)
+        self.__allpiterms = [
+            pi_set
+            for pi_set in self.__allpiterms
+            if all([_sign_valid(pi, self._is_var_signed) for pi in pi_set])
+        ]
+        logger.info(
+            f"-> Reduced from {n_before_constraints} to {len(self.__allpiterms)} "
+            f"pi sets after applying constraints"
+        )
+
     def __rm_duplicated_powers(self):
         # this algorithm rely on the fact that the nullspace function
         # in sympy set one free variable to 1 and the all other to zero
@@ -330,6 +389,9 @@ class BuckinghamPi:
         self.__solve_null_spaces()
 
         self.__construct_symbolic_pi_terms()
+
+        if self._is_var_signed:
+            self._apply_pi_term_constraints()
 
         self.__rm_duplicated_powers()
 
