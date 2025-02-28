@@ -66,7 +66,7 @@ def test_is_equal(v1_sets: Dict[str, List[List[sp.Expr]]]):
 def test_with_fixture(v1_sets: Dict[str, List[List[sp.Expr]]]):
     from buckinghampy import BuckinghamPi  # this is v2
 
-    v2_sets = fixtures.gen_all(BuckinghamPi)
+    v2_sets = fixtures.gen_all(BuckinghamPi, n_jobs=2)
     for key, set_list in v2_sets.items():
         # Check that sets are of same length
         assert len(set_list) == len(v1_sets[key])

@@ -14,10 +14,9 @@ __status__ = "Production"
 
 import concurrent.futures
 import logging
-import math
 import multiprocessing
 from itertools import combinations, permutations
-from typing import Dict, TypeAlias, List, Tuple, Set
+from typing import Dict, TypeAlias, List
 
 import numpy as np
 import sympy as sp
@@ -38,7 +37,7 @@ PiType: TypeAlias = sp.Expr
 PiSetType: TypeAlias = List[PiType]
 
 
-def find_duplicates(pi_set: PiSetType, other: List[PiSetType]) -> List[PiSetType]:
+def find_duplicates_worker(pi_set: PiSetType, other: List[PiSetType]) -> List[PiSetType]:
     duplicate = []
     permutations_sets = permutations(pi_set)
     for p_set in permutations_sets:
@@ -53,15 +52,11 @@ def find_duplicates(pi_set: PiSetType, other: List[PiSetType]) -> List[PiSetType
         # obtain the index of numerical value in the result vector.
         # numerical values indicates that one dimensionless group is the inverse of the other group
         # in this algorithm the numerical value will be equal to 1 (this is a result of the nullspace function in sympy)
-        idx_num_result = [
-            x for x in range(len(p_set)) if isinstance(result[x, 0], sp.Number)
-        ]
+        idx_num_result = [x for x in range(len(p_set)) if isinstance(result[x, 0], sp.Number)]
         # also repeat the multiplication with the inverse vector
         result_inv = sp.matrix_multiply_elementwise(p_V, o_V_inv)
         # check for the index of the numerical values in the result vector
-        idx_num_result_inv = [
-            x for x in range(len(p_set)) if isinstance(result_inv[x, 0], sp.Number)
-        ]
+        idx_num_result_inv = [x for x in range(len(p_set)) if isinstance(result_inv[x, 0], sp.Number)]
         # concatinate the indices into one list
         all_indices = idx_num_result + idx_num_result_inv
         # compare if the two vector are duplicates
@@ -122,11 +117,7 @@ class BuckinghamPi:
 
         expr = parse_expr(string.lower())
 
-        if not (
-            isinstance(expr, Mul)
-            or isinstance(expr, Pow)
-            or isinstance(expr, sp.Symbol)
-        ):
+        if not (isinstance(expr, Mul) or isinstance(expr, Pow) or isinstance(expr, sp.Symbol)):
             raise Exception(
                 "expression of type {} is not of the accepted types ({}, {}, {})".format(
                     type(expr), Mul, Pow, sp.Symbol
@@ -142,13 +133,9 @@ class BuckinghamPi:
         # Make sure dimensions only contain integer exponents
         # Technically this only checks for *any* rational number in the expression,
         # but units should only be expressions made up of a dimension and an exponent, so implicitly this is fine.
-        has_non_int_exp = any(
-            [not a.is_Integer for a in expr.atoms() if not a.is_Symbol]
-        )
+        has_non_int_exp = any([not a.is_Integer for a in expr.atoms() if not a.is_Symbol])
         if has_non_int_exp:
-            raise ValueError(
-                f"Dimension {expr} contains non-integer exponent(s), which is not allowed."
-            )
+            raise ValueError(f"Dimension {expr} contains non-integer exponent(s), which is not allowed.")
 
         # extract the physical dimensions from the dimensions expressions
         used_symbols = list(expr.free_symbols)
@@ -197,9 +184,7 @@ class BuckinghamPi:
                 self.__flagged_var["var_index"] = var_idx
                 self.__flagged_var["selected"] = True
             elif non_repeating and (self.__flagged_var["selected"] == True):
-                raise Exception(
-                    "you cannot select more than one variable at a time to be a non_repeating."
-                )
+                raise Exception("you cannot select more than one variable at a time to be a non_repeating.")
         else:
             self.__prefixed_dimensionless_terms.append(sp.symbols(name))
 
@@ -208,9 +193,7 @@ class BuckinghamPi:
         self.num_variable = len(list(self.__variables.keys()))
         num_physical_dimensions = len(self.__fundamental_vars_used)
         if self.num_variable <= num_physical_dimensions:
-            raise Exception(
-                "The number of variables has to be greater than the number of physical dimensions."
-            )
+            raise Exception("The number of variables has to be greater than the number of physical dimensions.")
 
         self.M = np.zeros(shape=(self.num_variable, num_physical_dimensions))
         # fill M
@@ -242,9 +225,7 @@ class BuckinghamPi:
 
     def __solve_null_spaces_for_flagged_variables(self):
 
-        assert (
-            self.__flagged_var["selected"] == True
-        ), " you need to select a variable to be explicit"
+        assert self.__flagged_var["selected"] == True, " you need to select a variable to be explicit"
 
         n = self.num_variable
         m = len(self.__fundamental_vars_used)
@@ -291,9 +272,7 @@ class BuckinghamPi:
                 expr = 1
                 idx = 0
                 for order, power in zip(term["order"].keys(), term["power"]):
-                    expr *= self.__sym_variables[term["order"][order]] ** sp.nsimplify(
-                        sp.Rational(power[0])
-                    )
+                    expr *= self.__sym_variables[term["order"][order]] ** sp.nsimplify(sp.Rational(power[0]))
                     idx += 1
                 spacepiterms.append(expr)
             # check for already existing pi terms in previous null-spaces
@@ -336,46 +315,29 @@ class BuckinghamPi:
         logger.info("Applying pi term constraints")
         n_before_constraints = len(self.__allpiterms)
         self.__allpiterms = [
-            pi_set
-            for pi_set in self.__allpiterms
-            if all([_sign_valid(pi, self._is_var_signed) for pi in pi_set])
+            pi_set for pi_set in self.__allpiterms if all([_sign_valid(pi, self._is_var_signed) for pi in pi_set])
         ]
         logger.info(
-            f"-> Reduced from {n_before_constraints} to {len(self.__allpiterms)} "
-            f"pi sets after applying constraints"
+            f"-> Reduced from {n_before_constraints} to {len(self.__allpiterms)} " f"pi sets after applying constraints"
         )
 
     def __rm_duplicated_powers(self):
+        logger.info("Removing duplicated pi terms. This can take a looooong time.")
         # this algorithm rely on the fact that the nullspace function
         # in sympy set one free variable to 1 and the all other to zero
         # then solve the system by back substitution.
+        duplicate = []
         dummy_other_terms = self.__allpiterms.copy()
 
-        # Build list of inputs to be processed
-        duplicate_inputs = []
-        for _, pi_set in enumerate(self.__allpiterms):
-            dummy_other_terms.remove(pi_set)
-            for _, other in enumerate(dummy_other_terms):
-                duplicate_inputs.append((pi_set, other))
+        futures = []
+        with concurrent.futures.ProcessPoolExecutor(max_workers=self.n_jobs) as executor:
+            for num_set, pi_set in enumerate(self.__allpiterms):
+                dummy_other_terms.remove(pi_set)
+                for num_other, other in enumerate(dummy_other_terms):
+                    futures.append(executor.submit(find_duplicates_worker, pi_set, other))
 
-        # Process inputs in parallel
-        n_pi_terms = len(self.__allpiterms[0])
-        logger.info(f"Removing duplicated powers ({len(duplicate_inputs)} tests)")
-        logger.info(
-            f"Each Pi set contains {n_pi_terms} Pi terms leading to {n_pi_terms}! "
-            f"= {math.factorial(n_pi_terms)} comparisons per test. This may take very long."
-        )
-
-        with concurrent.futures.ProcessPoolExecutor(max_workers=self.n_jobs) as e:
-            futures = [
-                e.submit(find_duplicates, pi_set, other)
-                for pi_set, other in duplicate_inputs
-            ]
-            duplicate = []
-            for future in tqdm.tqdm(
-                concurrent.futures.as_completed(futures), total=len(futures)
-            ):
-                duplicate.append(future.result())
+            for future in tqdm.tqdm(concurrent.futures.as_completed(futures), total=len(futures)):
+                duplicate.extend(future.result())
 
         # remove duplicates from the main dict of all pi terms
         for dup in duplicate:
