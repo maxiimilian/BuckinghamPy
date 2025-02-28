@@ -15,7 +15,6 @@ def gen_pressure_drop(bp) -> List[List[sp.Expr]]:
     bp.add_variable(name="Q", dimensions="L^(3)*T^(-1)")  # volumetic flow rate
 
     bp.generate_pi_terms()
-    print(len(bp.pi_terms))
     return bp.pi_terms
 
 
@@ -31,7 +30,6 @@ def gen_virus_infection(bp) -> List[List[sp.Expr]]:
     bp.add_variable(name="H", dimensions="M*L^(-3)")  # humidity
 
     bp.generate_pi_terms()
-    print(len(bp.pi_terms))
     return bp.pi_terms
 
 
@@ -44,7 +42,6 @@ def gen_economic_growth(bp) -> List[List[sp.Expr]]:
     bp.add_variable(name="{\\delta}", dimensions="1/T")  # depreciation rate
 
     bp.generate_pi_terms()
-    print(len(bp.pi_terms))
     return bp.pi_terms
 
 
@@ -54,7 +51,6 @@ def gen_bubble_pressure(bp) -> List[List[sp.Expr]]:
     bp.add_variable(name="\\sigma", dimensions="F*L^(-1)")  # surface tension
 
     bp.generate_pi_terms()
-    print(len(bp.pi_terms))
     return bp.pi_terms
 
 
