@@ -14,9 +14,10 @@ __status__ = "Production"
 
 import concurrent.futures
 import logging
+import math
 import multiprocessing
 from itertools import combinations, permutations
-from typing import Dict
+from typing import Dict, TypeAlias, List, Tuple, Set
 
 import numpy as np
 import sympy as sp
@@ -33,8 +34,11 @@ except:
 
 logger = logging.getLogger("buckinghampy")
 
+PiType: TypeAlias = sp.Expr
+PiSetType: TypeAlias = List[PiType]
 
-def find_duplicates(pi_set, other) -> list:
+
+def find_duplicates(pi_set: PiSetType, other: List[PiSetType]) -> List[PiSetType]:
     duplicate = []
     permutations_sets = permutations(pi_set)
     for p_set in permutations_sets:
@@ -135,6 +139,17 @@ class BuckinghamPi:
                 )
             )
 
+        # Make sure dimensions only contain integer exponents
+        # Technically this only checks for *any* rational number in the expression,
+        # but units should only be expressions made up of a dimension and an exponent, so implicitly this is fine.
+        has_non_int_exp = any(
+            [not a.is_Integer for a in expr.atoms() if not a.is_Symbol]
+        )
+        if has_non_int_exp:
+            raise ValueError(
+                f"Dimension {expr} contains non-integer exponent(s), which is not allowed."
+            )
+
         # extract the physical dimensions from the dimensions expressions
         used_symbols = list(expr.free_symbols)
         for sym in used_symbols:
@@ -172,17 +187,6 @@ class BuckinghamPi:
         """
         if dimensions != "1":
             expr = self.__parse_expression(dimensions)
-
-            # Make sure dimensions only contain integer exponents
-            # Technically this only checks for *any* rational number in the expression,
-            # but units should only be expressions made up of a dimension and an exponent, so implicitly this is fine.
-            has_rational_exponents = any(
-                [a.is_Rational and not a.is_Integer for a in expr.atoms()]
-            )
-            if has_rational_exponents:
-                raise ValueError(
-                    f"Dimensions {dimensions} contain fractional exponent(s), which is not allowed."
-                )
 
             self.__variables.update({name: expr})
             var_idx = len(list(self.__variables.keys())) - 1
@@ -355,7 +359,13 @@ class BuckinghamPi:
                 duplicate_inputs.append((pi_set, other))
 
         # Process inputs in parallel
+        n_pi_terms = len(self.__allpiterms[0])
         logger.info(f"Removing duplicated powers ({len(duplicate_inputs)} tests)")
+        logger.info(
+            f"Each Pi set contains {n_pi_terms} Pi terms leading to {n_pi_terms}! "
+            f"= {math.factorial(n_pi_terms)} comparisons per test. This may take very long."
+        )
+
         with concurrent.futures.ProcessPoolExecutor(max_workers=self.n_jobs) as e:
             futures = [
                 e.submit(find_duplicates, pi_set, other)
