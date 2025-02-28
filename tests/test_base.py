@@ -28,3 +28,5 @@ def test_parsing():
         bp.add_variable('x', 'L ** 0.5')
     assert "non-integer exponent" in e.value.args[0]
 
+
+def test_basic_set
