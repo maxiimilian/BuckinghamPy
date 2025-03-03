@@ -2,6 +2,7 @@ import pathlib
 import time
 from typing import List, Tuple, Type
 
+import numpy.testing as npt
 import sympy as sp
 
 # Long set with many variables
@@ -15,7 +16,7 @@ long_set: List[Tuple[str, str]] = [
     ("g", "K"),
     ("h", "m/s"),
     ("v", "m/s"),
-    # ("u_var", "m^2/s^2"),
+    ("u_var", "m^2/s^2"),
 ]
 
 
@@ -40,6 +41,7 @@ def test_v1_speed():
     bp: BuckinghamPi = get_bp_instance(BuckinghamPi)
     t_start = time.time()
     bp.generate_pi_terms()
+    print(len(bp.pi_terms))
     t_end = time.time()
     print(f"v1: {t_end - t_start:.2f} s")
 
@@ -51,6 +53,7 @@ def test_v2_speed():
     bp: BuckinghamPi = get_bp_instance(BuckinghamPi, n_jobs=1)
     t_start = time.time()
     bp.generate_pi_terms()
+    print(len(bp.pi_terms))
     t_end = time.time()
     print(f"v2: {t_end - t_start:.2f} s")
 
@@ -65,9 +68,12 @@ def test_v1_v2_equivalence():
     bp_v1.generate_pi_terms()
     bp_v1_set = bp_v1.pi_terms
 
-    bp_v2: BuckinghamPiV2 = get_bp_instance(BuckinghamPiV2, n_jobs=1)
+    bp_v2: BuckinghamPiV2 = get_bp_instance(BuckinghamPiV2, n_jobs=8)
     bp_v2.generate_pi_terms()
     bp_v2_set = bp_v2.pi_terms
+
+    ## Compare internals
+    npt.assert_array_equal(bp_v1.M, bp_v2.M)
 
     # Dump for debugging
     pathlib.Path("dump_v1.txt").write_text(dump_pi_list(bp_v1_set))

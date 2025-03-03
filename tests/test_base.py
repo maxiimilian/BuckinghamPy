@@ -30,12 +30,12 @@ def test_parsing():
     # Only multiplications, powers, and symbols are allowed
     with pytest.raises(Exception) as e:
         bp.add_variable("x", "L + 1")
-    assert "not of the accepted types" in e.value.args[0]
+    assert "must be a product, power, or symbol" in e.value.args[0]
 
     # No factors
     with pytest.raises(Exception) as e:
         bp.add_variable("x", "5 * L")
-    assert "cannot have coefficients" in e.value.args[0]
+    assert "Cannot have coefficients" in e.value.args[0]
 
     # No fractional exponents
     with pytest.raises(ValueError) as e:
