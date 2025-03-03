@@ -65,11 +65,7 @@ class BuckinghamPi:
 
         expr = parse_expr(string.lower())
 
-        if not (
-            isinstance(expr, Mul)
-            or isinstance(expr, Pow)
-            or isinstance(expr, sp.Symbol)
-        ):
+        if not (isinstance(expr, Mul) or isinstance(expr, Pow) or isinstance(expr, sp.Symbol)):
             raise Exception(
                 "expression of type {} is not of the accepted types ({}, {}, {})".format(
                     type(expr), Mul, Pow, sp.Symbol
@@ -128,9 +124,7 @@ class BuckinghamPi:
                 self.__flagged_var["var_index"] = var_idx
                 self.__flagged_var["selected"] = True
             elif non_repeating and (self.__flagged_var["selected"] == True):
-                raise Exception(
-                    "you cannot select more than one variable at a time to be a non_repeating."
-                )
+                raise Exception("you cannot select more than one variable at a time to be a non_repeating.")
         else:
             self.__prefixed_dimensionless_terms.append(sp.symbols(name))
 
@@ -138,9 +132,7 @@ class BuckinghamPi:
         self.num_variable = len(list(self.__variables.keys()))
         num_physical_dimensions = len(self.__fundamental_vars_used)
         if self.num_variable <= num_physical_dimensions:
-            raise Exception(
-                "The number of variables has to be greater than the number of physical dimensions."
-            )
+            raise Exception("The number of variables has to be greater than the number of physical dimensions.")
 
         self.M = np.zeros(shape=(self.num_variable, num_physical_dimensions))
         # fill M
@@ -170,9 +162,7 @@ class BuckinghamPi:
 
     def __solve_null_spaces_for_flagged_variables(self):
 
-        assert (
-            self.__flagged_var["selected"] == True
-        ), " you need to select a variable to be explicit"
+        assert self.__flagged_var["selected"] == True, " you need to select a variable to be explicit"
 
         n = self.num_variable
         m = len(self.__fundamental_vars_used)
@@ -218,9 +208,7 @@ class BuckinghamPi:
                 expr = 1
                 idx = 0
                 for order, power in zip(term["order"].keys(), term["power"]):
-                    expr *= self.__sym_variables[term["order"][order]] ** sp.nsimplify(
-                        sp.Rational(power[0])
-                    )
+                    expr *= self.__sym_variables[term["order"][order]] ** sp.nsimplify(sp.Rational(power[0]))
                     idx += 1
                 spacepiterms.append(expr)
             # check for already existing pi terms in previous null-spaces
@@ -241,7 +229,7 @@ class BuckinghamPi:
         for num_set, pi_set in enumerate(self.__allpiterms):
             dummy_other_terms.remove(pi_set)
             for num_other, other in enumerate(dummy_other_terms):
-                permutations_sets = permutations(pi_set)
+                permutations_sets = list(permutations(pi_set))
                 for p_set in permutations_sets:
                     # create a permutation vector from the permutation set
                     p_V = sp.Matrix(list(p_set))
@@ -254,19 +242,11 @@ class BuckinghamPi:
                     # obtain the index of numerical value in the result vector.
                     # numerical values indicates that one dimensionless group is the inverse of the other group
                     # in this algorithm the numerical value will be equal to 1 (this is a result of the nullspace function in sympy)
-                    idx_num_result = [
-                        x
-                        for x in range(len(p_set))
-                        if isinstance(result[x, 0], sp.Number)
-                    ]
+                    idx_num_result = [x for x in range(len(p_set)) if isinstance(result[x, 0], sp.Number)]
                     # also repeat the multiplication with the inverse vector
                     result_inv = sp.matrix_multiply_elementwise(p_V, o_V_inv)
                     # check for the index of the numerical values in the result vector
-                    idx_num_result_inv = [
-                        x
-                        for x in range(len(p_set))
-                        if isinstance(result_inv[x, 0], sp.Number)
-                    ]
+                    idx_num_result_inv = [x for x in range(len(p_set)) if isinstance(result_inv[x, 0], sp.Number)]
                     # concatinate the indices into one list
                     all_indices = idx_num_result + idx_num_result_inv
                     # compare if the two vector are duplicates

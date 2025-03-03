@@ -37,7 +37,7 @@ PiType: TypeAlias = sp.Expr
 PiSetType: TypeAlias = List[PiType]
 
 
-def find_duplicates_worker(pi_set: PiSetType, other: List[PiSetType]) -> List[PiSetType]:
+def find_duplicates_worker(pi_set: PiSetType, other: PiSetType) -> List[PiSetType]:
     duplicate = []
     permutations_sets = permutations(pi_set)
     for p_set in permutations_sets:
