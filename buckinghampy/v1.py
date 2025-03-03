@@ -42,7 +42,7 @@ class BuckinghamPi:
 
         self.__prefixed_dimensionless_terms = []
 
-        self.__flagged_var_max_sets = 20
+        self.__flagged_var_max_sets = None
 
     @property
     def fundamental_variables(self):
