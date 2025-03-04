@@ -16,7 +16,7 @@ import concurrent.futures
 import logging
 import multiprocessing
 from itertools import combinations
-from typing import Dict, TypeAlias, List
+from typing import Dict, TypeAlias, List, Callable, Tuple, Protocol
 
 import numpy as np
 import sympy as sp
@@ -33,8 +33,14 @@ except:
 
 logger = logging.getLogger("buckinghampy")
 
+# Types for individual pi group and list of groups, i.e., a pi set
 PiType: TypeAlias = sp.Expr
 PiSetType: TypeAlias = List[PiType]
+
+
+class ConstraintFnType(Protocol):
+    def __call__(self, pi_set: PiSetType, **kwargs) -> bool:
+        """Check if pi_set is valid according to some constraint. Return True if valid, False otherwise."""
 
 
 def find_duplicates_worker(pi_set: PiSetType, other: PiSetType) -> List[PiSetType]:
@@ -105,50 +111,45 @@ def find_duplicates_worker(pi_set: PiSetType, other: PiSetType) -> List[PiSetTyp
 
 
 class BuckinghamPi:
-    def __init__(
-        self,
-        n_jobs: int = 1,
-        var_max_sets: int | None = None,
-        is_var_signed: Dict[str, bool] | None = None,
-    ):
+    def __init__(self, n_jobs: int = 1, var_max_sets: int | None = None):
         """
         Construct an instance of the BuckinghamPi theorem
         """
-        self.__var_from_idx = {}
-        self.__idx_from_var = {}
-        self.__variables = {}
-        self.__sym_variables = {}
-        self.__flagged_var = {"var_name": None, "var_index": None, "selected": False}
+        self._var_from_idx = {}
+        self._idx_from_var = {}
+        self._variables = {}
+        self._sym_variables = {}
+        self._flagged_var = {"var_name": None, "var_index": None, "selected": False}
 
-        self.__null_spaces = []
+        self._null_spaces = []
 
-        self.__fundamental_vars_used = []  # list of fundamental variables being used
+        self._fundamental_vars_used = []  # list of fundamental variables being used
 
-        self.__prefixed_dimensionless_terms = []
+        self._prefixed_dimensionless_terms = []
 
         if (n_jobs == -1) or (n_jobs is None):
             self.n_jobs = multiprocessing.cpu_count()
         else:
             self.n_jobs = n_jobs
 
-        self.__flagged_var_max_sets = var_max_sets
-        self._is_var_signed = is_var_signed
+        self._flagged_var_max_sets = var_max_sets
+        self._constraint_fns: List[Tuple[Callable, Dict]] = []
 
     @property
     def fundamental_variables(self):
         """
         :return: a list of the fundamental variables being used
         """
-        return self.__fundamental_vars_used
+        return self._fundamental_vars_used
 
     @property
     def variables(self):
         """
         :return: a dict of the variables added by the user.
         """
-        return self.__variables
+        return self._variables
 
-    def __parse_expression(self, string: str):
+    def _parse_expression(self, string: str):
         if "^" in string:
             # convert the xor operator to power operator
             string = string.replace("^", "**")
@@ -178,26 +179,26 @@ class BuckinghamPi:
         # extract the physical dimensions from the dimensions expressions
         used_symbols = list(expr.free_symbols)
         for sym in used_symbols:
-            if not sym in self.__fundamental_vars_used:
-                self.__fundamental_vars_used.append(sym)
+            if not sym in self._fundamental_vars_used:
+                self._fundamental_vars_used.append(sym)
 
         return expr
 
-    def __extract_exponents(self, expr: Expr):
-        num_physical_dimensions = len(self.__fundamental_vars_used)
+    def _extract_exponents(self, expr: Expr):
+        num_physical_dimensions = len(self._fundamental_vars_used)
         vect = np.zeros(num_physical_dimensions)
         args = list(expr.args) if list(expr.args) else [expr]
         # print(args)
         if isinstance(expr, Pow):
-            vect[self.__fundamental_vars_used.index(args[0])] = int(args[1])
+            vect[self._fundamental_vars_used.index(args[0])] = int(args[1])
         else:
             for e in args:
                 if isinstance(expr, sp.Symbol):
-                    vect[self.__fundamental_vars_used.index(e)] = int(1)
+                    vect[self._fundamental_vars_used.index(e)] = int(1)
                     # print('({}, {})'.format(e, 1))
                 else:
                     var, exponent = e.as_base_exp()
-                    vect[self.__fundamental_vars_used.index(var)] = int(exponent)
+                    vect[self._fundamental_vars_used.index(var)] = int(exponent)
                     # print('({}, {})'.format(var, exponent))
 
         return vect
@@ -211,70 +212,76 @@ class BuckinghamPi:
                                         only shows up in one dimensionless group.
         """
         if dimensions != "1":
-            expr = self.__parse_expression(dimensions)
+            expr = self._parse_expression(dimensions)
 
-            self.__variables.update({name: expr})
-            var_idx = len(list(self.__variables.keys())) - 1
-            self.__var_from_idx[var_idx] = name
-            self.__idx_from_var[name] = var_idx
-            if non_repeating and (self.__flagged_var["selected"] == False):
-                self.__flagged_var["var_name"] = name
-                self.__flagged_var["var_index"] = var_idx
-                self.__flagged_var["selected"] = True
-            elif non_repeating and (self.__flagged_var["selected"] == True):
+            self._variables.update({name: expr})
+            var_idx = len(list(self._variables.keys())) - 1
+            self._var_from_idx[var_idx] = name
+            self._idx_from_var[name] = var_idx
+            if non_repeating and (self._flagged_var["selected"] == False):
+                self._flagged_var["var_name"] = name
+                self._flagged_var["var_index"] = var_idx
+                self._flagged_var["selected"] = True
+            elif non_repeating and (self._flagged_var["selected"] == True):
                 raise Exception("you cannot select more than one variable at a time to be a non_repeating.")
         else:
-            self.__prefixed_dimensionless_terms.append(sp.symbols(name))
+            self._prefixed_dimensionless_terms.append(sp.symbols(name))
 
-    def __create_M(self):
+    def add_pi_set_constraint(self, constraint_fn: ConstraintFnType, **fn_kwargs):
+        """
+        Add a constraint to the pi sets. The function should return True if the pi set is valid, False otherwise.
+        """
+        self._constraint_fns.append((constraint_fn, fn_kwargs))
+
+    def _create_M(self):
         logger.info("Creating M matrix")
-        self.num_variable = len(list(self.__variables.keys()))
-        num_physical_dimensions = len(self.__fundamental_vars_used)
+        self.num_variable = len(list(self._variables.keys()))
+        num_physical_dimensions = len(self._fundamental_vars_used)
         if self.num_variable <= num_physical_dimensions:
             raise Exception("The number of variables has to be greater than the number of physical dimensions.")
 
         self.M = np.zeros(shape=(self.num_variable, num_physical_dimensions))
         # fill M
-        for var_name in self.__variables.keys():
-            expr = self.__variables[var_name]
-            vect = self.__extract_exponents(expr)
-            row = self.__idx_from_var[var_name]
+        for var_name in self._variables.keys():
+            expr = self._variables[var_name]
+            vect = self._extract_exponents(expr)
+            row = self._idx_from_var[var_name]
             self.M[row, :] = vect
 
         self.M = self.M.transpose()
 
-    def __create_symbolic_variables(self):
+    def _create_symbolic_variables(self):
         logger.info("Creating symbolic variables")
-        for var_name in self.__variables.keys():
-            self.__sym_variables[var_name] = sp.symbols(var_name)
+        for var_name in self._variables.keys():
+            self._sym_variables[var_name] = sp.symbols(var_name)
 
-    def __solve_null_spaces(self):
+    def _solve_null_spaces(self):
         logger.info("Solving null spaces")
-        if self.__flagged_var["selected"] == True:
-            self.__solve_null_spaces_for_flagged_variables()
+        if self._flagged_var["selected"] == True:
+            self._solve_null_spaces_for_flagged_variables()
 
         else:
-            for idx in self.__var_from_idx.keys():
-                self.__flagged_var["var_name"] = self.__var_from_idx[idx]
-                self.__flagged_var["var_index"] = idx
-                self.__flagged_var["selected"] = True
+            for idx in self._var_from_idx.keys():
+                self._flagged_var["var_name"] = self._var_from_idx[idx]
+                self._flagged_var["var_index"] = idx
+                self._flagged_var["selected"] = True
 
-                self.__solve_null_spaces_for_flagged_variables()
+                self._solve_null_spaces_for_flagged_variables()
 
-    def __solve_null_spaces_for_flagged_variables(self):
+    def _solve_null_spaces_for_flagged_variables(self):
 
-        assert self.__flagged_var["selected"] == True, " you need to select a variable to be explicit"
+        assert self._flagged_var["selected"] == True, " you need to select a variable to be explicit"
 
         n = self.num_variable
-        m = len(self.__fundamental_vars_used)
+        m = len(self._fundamental_vars_used)
 
         original_indicies = list(range(0, n))
         all_idx = original_indicies.copy()
-        if self.__flagged_var["selected"]:
-            del all_idx[self.__flagged_var["var_index"]]
+        if self._flagged_var["selected"]:
+            del all_idx[self._flagged_var["var_index"]]
 
         # print(all_idx)
-        all_combs = list(combinations(all_idx, m))[: self.__flagged_var_max_sets]
+        all_combs = list(combinations(all_idx, m))[: self._flagged_var_max_sets]
         # print(all_combs)
 
         num_det_0 = 0
@@ -287,7 +294,7 @@ class BuckinghamPi:
                 temp_comb.append(extra_var)
                 A = self.M[:, temp_comb].copy()
                 for num, var_idx in enumerate(temp_comb):
-                    new_order[num] = self.__var_from_idx[var_idx]
+                    new_order[num] = self._var_from_idx[var_idx]
                 B = sp.Matrix(A)
                 test_mat = B[:, :m]
                 if sp.det(test_mat) != 0:
@@ -298,78 +305,53 @@ class BuckinghamPi:
                     num_det_0 += 1
                 temp_comb = list(comb).copy()
             if b_ns:  # if b_ns is not empty add it to the nullspaces list
-                self.__null_spaces.append(b_ns)
+                self._null_spaces.append(b_ns)
         # print("num of det 0 : ",num_det_0)
 
-    def __construct_symbolic_pi_terms(self):
+    def _construct_symbolic_pi_terms(self):
         logger.info("Constructing symbolic pi terms")
-        self.__allpiterms = []
-        for space in self.__null_spaces:
+        self._allpiterms = []
+        for space in self._null_spaces:
             spacepiterms = []
             for term in space:
                 expr = 1
                 idx = 0
                 for order, power in zip(term["order"].keys(), term["power"]):
-                    expr *= self.__sym_variables[term["order"][order]] ** sp.nsimplify(sp.Rational(power[0]))
+                    expr *= self._sym_variables[term["order"][order]] ** sp.nsimplify(sp.Rational(power[0]))
                     idx += 1
                 spacepiterms.append(expr)
             # check for already existing pi terms in previous null-spaces
             already_exists = False
-            for previouspiterms in self.__allpiterms:
+            for previouspiterms in self._allpiterms:
                 if all(x in previouspiterms for x in spacepiterms):
                     already_exists = True
                     break
             if not already_exists:
-                self.__allpiterms.append(spacepiterms)
+                self._allpiterms.append(spacepiterms)
 
     def _apply_pi_term_constraints(self):
 
-        def _sign_valid(pi: sp.Expr, var_is_signed: Dict[str, bool]) -> bool:
-            """
-            Returns False if provided Pi group has an argument which is a **signed** symbol
-            raised to an **even** or **non-integer** power.
-
-            E.g. sqrt(shfx) would cause NaN in unstable conditions
-            and shfx**2 would lose information. Therefore, we avoid these!
-            """
-            for arg in pi.args:
-                if arg.is_Atom:
-                    continue
-                elif arg.is_Pow:
-                    # Allow all power expressions with uneven integer exponents because that keeps original sign
-                    arg: sp.Pow
-                    if arg.exp.is_Integer and not arg.exp.is_even:
-                        continue
-
-                    # Only allow even or non-integer exponents if base is unsigned
-                    if var_is_signed[str(arg.base)]:
-                        logger.debug(f"Eliminating {pi} because of {arg}.")
-                        return False
-                else:
-                    raise ValueError(f"Unexpected argument {type(arg)} in Pi group pi")
-
-            return True
-
-        logger.info("Applying pi term constraints")
-        n_before_constraints = len(self.__allpiterms)
-        self.__allpiterms = [
-            pi_set for pi_set in self.__allpiterms if all([_sign_valid(pi, self._is_var_signed) for pi in pi_set])
+        logger.info(f"Applying pi set constraints ({[fn.__name__ for fn, _ in self._constraint_fns]})")
+        n_before_constraints = len(self._allpiterms)
+        is_valid = [
+            all([fn(pi_set, **fn_kwargs) for fn, fn_kwargs in self._constraint_fns]) for pi_set in self._allpiterms
         ]
+        self._allpiterms = [pi_set for pi_set, valid in zip(self._allpiterms, is_valid) if valid]
         logger.info(
-            f"-> Reduced from {n_before_constraints} to {len(self.__allpiterms)} " f"pi sets after applying constraints"
+            f"-> Reduced from {n_before_constraints} to {len(self._allpiterms)} " f"pi sets after applying constraints"
         )
 
-    def __rm_duplicated_powers(self):
-        logger.info("Removing duplicated pi terms. This can take a looooong time.")
+    def _rm_duplicated_powers(self):
+        logger.info(f"Removing duplicated Pi sets. Starting with {len(self._allpiterms)} sets.")
         # this algorithm rely on the fact that the nullspace function
         # in sympy set one free variable to 1 and the all other to zero
         # then solve the system by back substitution.
         duplicate = []
-        dummy_other_terms = self.__allpiterms.copy()
+        dummy_other_terms = self._allpiterms.copy()
 
         futures = []
         with concurrent.futures.ProcessPoolExecutor(max_workers=self.n_jobs) as executor:
-            for num_set, pi_set in enumerate(self.__allpiterms):
+            for num_set, pi_set in enumerate(self._allpiterms):
                 dummy_other_terms.remove(pi_set)
                 for num_other, other in enumerate(dummy_other_terms):
                     futures.append(executor.submit(find_duplicates_worker, pi_set, other))
@@ -379,33 +361,34 @@ class BuckinghamPi:
 
         # remove duplicates from the main dict of all pi terms
         for dup in duplicate:
-            if dup in self.__allpiterms:
-                self.__allpiterms.remove(dup)
+            if dup in self._allpiterms:
+                self._allpiterms.remove(dup)
+
+        logger.info(f"-> Reduced to {len(self._allpiterms)} sets after removing duplicates.")
         return duplicate
 
-    def __populate_prefixed_dimensionless_groups(self):
-        for num_set, pi_set in enumerate(self.__allpiterms):
-            for pre_fixed_dimensionless_group in self.__prefixed_dimensionless_terms:
-                self.__allpiterms[num_set].append(pre_fixed_dimensionless_group)
+    def _populate_prefixed_dimensionless_groups(self):
+        for num_set, pi_set in enumerate(self._allpiterms):
+            for pre_fixed_dimensionless_group in self._prefixed_dimensionless_terms:
+                self._allpiterms[num_set].append(pre_fixed_dimensionless_group)
 
     def generate_pi_terms(self):
         """
         Generates all the possible pi terms
         """
-        self.__create_M()
+        self._create_M()
 
-        self.__create_symbolic_variables()
+        self._create_symbolic_variables()
 
-        self.__solve_null_spaces()
+        self._solve_null_spaces()
 
-        self.__construct_symbolic_pi_terms()
+        self._construct_symbolic_pi_terms()
 
-        if self._is_var_signed:
-            self._apply_pi_term_constraints()
+        self._apply_pi_term_constraints()
 
-        self.__rm_duplicated_powers()
+        self._rm_duplicated_powers()
 
-        self.__populate_prefixed_dimensionless_groups()
+        self._populate_prefixed_dimensionless_groups()
         logger.info("Done!")
 
     @property
@@ -413,11 +396,11 @@ class BuckinghamPi:
         """
         :return: a list with all the symbolic dimensionless terms for all permutation of the dimensional Matrix M
         """
-        return self.__allpiterms
+        return self._allpiterms
 
-    def __Jupyter_print(self):
+    def _jupyter_print(self):
         """print the rendered Latex format in Jupyter cell"""
-        for set_num, space in enumerate(self.__allpiterms):
+        for set_num, space in enumerate(self._allpiterms):
             latex_str = "\\text{Set }"
             latex_str += "{}: \\quad".format(set_num + 1)
             for num, term in enumerate(space):
@@ -426,9 +409,9 @@ class BuckinghamPi:
             display(Math(latex_str))
             display(Markdown("---"))
 
-    def __get_latex_form(self, latex_string=False):
+    def _get_latex_form(self, latex_string=False):
         latex_form = []
-        for pi_set in self.__allpiterms:
+        for pi_set in self._allpiterms:
             latex_set = []
             for pi in pi_set:
                 if latex_string:
@@ -451,9 +434,9 @@ class BuckinghamPi:
 
         return latex_form
 
-    def __tabulate_print(self, latex_string=False):
+    def _tabulate_print(self, latex_string=False):
         """print the dimensionless sets in a tabulated format"""
-        print(tabulate(self.__get_latex_form(latex_string), headers=headers))
+        print(tabulate(self._get_latex_form(latex_string), headers=headers))
 
     def print_all(self, latex_string=False):
         """
@@ -464,11 +447,11 @@ class BuckinghamPi:
         """
         try:
             """Try to render the latex in Jupyter cell"""
-            self.__Jupyter_print()
+            self._jupyter_print()
         except:
             """print the dimensionless sets in a tabulated format when in terminal session"""
-            self.__tabulate_print(latex_string)
+            self._tabulate_print(latex_string)
 
     def return_all(self, latex_string=False):
         """return all of the latex output in a dict for easier downstream processing"""
-        return self.__get_latex_form(latex_string)
+        return self._get_latex_form(latex_string)
