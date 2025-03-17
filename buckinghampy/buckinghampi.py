@@ -39,8 +39,10 @@ PiSetType: TypeAlias = List[PiType]
 
 
 class ConstraintFnType(Protocol):
-    def __call__(self, pi_set: PiSetType, **kwargs) -> bool:
-        """Check if pi_set is valid according to some constraint. Return True if valid, False otherwise."""
+    def __call__(self, pi_set: PiSetType, **kwargs) -> bool | Tuple[bool, PiSetType]:
+        """Check if pi_set is valid according to some constraint. Return True if valid, False otherwise.
+        If returns bool and a pi set, the pi set will be used instead of the original pi set.
+        """
 
 
 def find_duplicates_worker(pi_set: PiSetType, other: PiSetType) -> List[PiSetType]:
@@ -332,14 +334,27 @@ class BuckinghamPi:
     def _apply_pi_term_constraints(self):
 
         logger.info(f"Applying pi set constraints ({[fn.__name__ for fn, _ in self._constraint_fns]})")
-        n_before_constraints = len(self._allpiterms)
-        is_valid = [
-            all([fn(pi_set, **fn_kwargs) for fn, fn_kwargs in self._constraint_fns]) for pi_set in self._allpiterms
-        ]
-        self._allpiterms = [pi_set for pi_set, valid in zip(self._allpiterms, is_valid) if valid]
+        pi_sets_valid = []
+        for pi_set in self._allpiterms:
+            is_valid = True
+            for fn, fn_kwargs in self._constraint_fns:
+                # Handle constraints that return a new pi set
+                res = fn(pi_set, **fn_kwargs)
+                try:
+                    # Note, the new pi set is used for upcoming constraints
+                    is_valid, pi_set = res
+                except TypeError:
+                    is_valid = res
+                if not is_valid:
+                    # If any constraint fails, break
+                    break
+            if is_valid:
+                pi_sets_valid.append(pi_set)
+
         logger.info(
-            f"-> Reduced from {n_before_constraints} to {len(self._allpiterms)} " f"pi sets after applying constraints"
+            f"-> Reduced from {len(self._allpiterms)} to {len(pi_sets_valid)} " f"pi sets after applying constraints"
         )
+        self._allpiterms = pi_sets_valid
 
     def _rm_duplicated_powers(self):
         logger.info(f"Removing duplicated Pi sets. Starting with {len(self._allpiterms)} sets.")
